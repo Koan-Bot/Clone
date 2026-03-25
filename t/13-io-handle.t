@@ -136,9 +136,30 @@ SKIP: {
     $sock->close;
 }
 
-# --- Test 13-16: DBI database handle (the original GH #27 report) ---
+# --- Test 13-18: DBI handles (the original GH #27 report) ---
+#
+# DBI's DESTROY dumps SV internals for magic-less clones.  The dump comes
+# from both scope-exit destruction AND global destruction (circular refs
+# in cloned DBI handles survive until global cleanup).  We mute STDERR
+# before cloning and use an END block to restore it so the noise is
+# suppressed in both cases.
 
 my $_saved_stderr;
+
+sub _mute_stderr {
+    return if $_saved_stderr;
+    open($_saved_stderr, '>&', STDERR) or return;
+    open(STDERR, '>', File::Spec->devnull);
+}
+
+sub _restore_stderr {
+    return unless $_saved_stderr;
+    open(STDERR, '>&', $_saved_stderr);
+    close($_saved_stderr);
+    undef $_saved_stderr;
+}
+
+END { _restore_stderr() }
 
 SKIP: {
     eval { require DBI; require DBD::SQLite }
@@ -152,8 +173,10 @@ SKIP: {
     $dbh->do("INSERT INTO test VALUES (1, 'foo')");
 
     # Test 13: clone does not segfault
+    _mute_stderr();
     my $cloned;
     my $ok = eval { $cloned = clone($dbh); 1 };
+    _restore_stderr();
     ok($ok, "GH #27: clone of DBI handle does not segfault")
         or diag("Error: $@");
 
@@ -179,17 +202,9 @@ SKIP: {
     $sth->finish;
     $dbh->disconnect;
 
-    # Mute STDERR through scope exit — DBI's DESTROY dumps SV internals
-    # for magic-less clones stored in XS magic chains that _defang cannot
-    # reach via Perl-visible hash values.
-    open($_saved_stderr, '>&', STDERR);
-    open(STDERR, '>', File::Spec->devnull);
+    # Mute STDERR through scope exit and global destruction
+    _mute_stderr();
 }
-
-# Restore STDERR after DBI clone destruction
-open(STDERR, '>&', $_saved_stderr);
-close($_saved_stderr);
-undef $_saved_stderr;
 
 # --- Test 17-18: DBI statement handle ---
 
@@ -207,6 +222,7 @@ SKIP: {
     # Test 17: clone of sth does not segfault
     my $cloned;
     my $ok = eval { $cloned = clone($sth); 1 };
+    _restore_stderr();
     ok($ok, "clone of DBI statement handle does not segfault")
         or diag("Error: $@");
 
@@ -220,12 +236,8 @@ SKIP: {
     $sth->finish;
     $dbh->disconnect;
 
-    # Mute STDERR through scope exit (see comment in test 13-16 block)
-    open($_saved_stderr, '>&', STDERR);
-    open(STDERR, '>', File::Spec->devnull);
+    # Mute STDERR through scope exit and global destruction
+    _mute_stderr();
 }
 
-# Restore STDERR after DBI clone destruction
-open(STDERR, '>&', $_saved_stderr);
-close($_saved_stderr);
-undef $_saved_stderr;
+# END block (declared above) will restore STDERR during global cleanup
