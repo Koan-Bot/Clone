@@ -159,7 +159,10 @@ sub _restore_stderr {
     undef $_saved_stderr;
 }
 
-END { _restore_stderr() }
+# Do NOT restore STDERR here — DBI clones with circular refs survive
+# to global destruction (after END blocks), and their DESTROY dumps SVs.
+# Leaving STDERR muted through global destruction suppresses that noise.
+# TAP output goes to STDOUT and is unaffected.
 
 SKIP: {
     eval { require DBI; require DBD::SQLite }
@@ -240,4 +243,4 @@ SKIP: {
     _mute_stderr();
 }
 
-# END block (declared above) will restore STDERR during global cleanup
+# STDERR stays muted through process exit (see comment near _restore_stderr)
